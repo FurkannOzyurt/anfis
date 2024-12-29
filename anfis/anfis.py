@@ -6,7 +6,7 @@ Created on Thu Apr 03 07:30:34 2014
 """
 import itertools
 import numpy as np
-from membership import mfDerivs
+from anfis.membership import mfDerivs
 import copy
 
 class ANFIS:
@@ -54,7 +54,7 @@ class ANFIS:
             x = x + (np.dot(S,np.dot(np.matrix(a).transpose(),(np.matrix(b)-np.dot(np.matrix(a),x)))))
         return x
 
-    def trainHybridJangOffLine(self, epochs=5, tolerance=1e-5, initialGamma=1000, k=0.01):
+    def trainHybridJangOffLine(self, epochs=5, tolerance=1e-5, initialGamma=1000, k=0.001):
 
         self.trainingType = 'trainHybridJangOffLine'
         convergence = False
@@ -72,9 +72,9 @@ class ANFIS:
 
             #error
             error = np.sum((self.Y-layerFive.T)**2)
-            print('current error: '+ str(error))
             average_error = np.average(np.absolute(self.Y-layerFive.T))
-            self.errors = np.append(self.errors,error)
+            print('current error: ', np.sqrt(np.average(error)))
+            self.errors = np.append(self.errors, error)
 
             if len(self.errors) != 0:
                 if self.errors[len(self.errors)-1] < tolerance:
