@@ -73,7 +73,7 @@ class ANFIS:
             #error
             error = np.sum((self.Y-layerFive.T)**2)
             average_error = np.average(np.absolute(self.Y-layerFive.T))
-            print('current error: ', np.sqrt(np.average(error)))
+            print('Epoch: ',epoch ,'\tcurrent error: ', np.sqrt(np.average(error)))
             self.errors = np.append(self.errors, error)
 
             if len(self.errors) != 0:
