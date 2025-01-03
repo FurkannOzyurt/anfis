@@ -8,7 +8,7 @@ import itertools
 import numpy as np
 import copy
 from matplotlib import pyplot as plt
-from membership import mfDerivs
+from .membership import mfDerivs
 
 
 class ANFIS:
