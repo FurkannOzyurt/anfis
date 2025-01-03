@@ -8,6 +8,8 @@ import itertools
 import numpy as np
 import copy
 from matplotlib import pyplot as plt
+from membership import mfDerivs
+
 
 class ANFIS:
     """
@@ -70,6 +72,29 @@ class ANFIS:
 
         return np.array(layerFour), wSum, np.array(layerTwo)
 
+    def _computeGradient(self, inputVarIndex, mfIndex, param):
+        """
+        Compute the gradient for a specific membership function parameter.
+
+        Args:
+            inputVarIndex (int): Index of the input variable.
+            mfIndex (int): Index of the membership function.
+            param (str): Parameter name (e.g., 'mean', 'sigma').
+
+        Returns:
+            float: Gradient value for the specified parameter.
+        """
+        gradient = 0.0
+        for i in range(self.XLen):
+            x = self.X[i, inputVarIndex]
+            y_actual = self.Y[i]
+            y_pred = np.dot(self._forwardHalfPass(self.X[i:i + 1])[0], self.consequents)
+
+            partial_dmf = mfDerivs.partial_dMF(x, self.memFuncs[inputVarIndex][mfIndex], param)
+            gradient += 2 * (y_actual - y_pred) * partial_dmf
+
+        return gradient / self.XLen
+
     def trainHybridJangOffLine(self, epochs=5, k=0.001):
         """
         Train the ANFIS system using a hybrid learning algorithm.
@@ -83,14 +108,27 @@ class ANFIS:
         epoch = 1
 
         while epoch <= epochs and not convergence:
-            layerFour, wSum, w = self._forwardHalfPass(self.X)
-            # Perform forward and backward propagation here (omitted for brevity)
+            layerFour, _, _ = self._forwardHalfPass(self.X)
 
-            # Dummy error calculation and convergence check
-            error = np.random.random()  # Replace with actual error calculation
+            # Least Squares Estimation for consequents
+            self.consequents = np.linalg.lstsq(layerFour, self.Y, rcond=None)[0]
+
+            # Compute predictions
+            predictions = np.dot(layerFour, self.consequents)
+
+            # Compute error
+            error = np.mean((self.Y - predictions) ** 2)
             self.errors.append(error)
             print(f"Epoch {epoch}: Error = {error}")
 
+            # Backward propagation
+            for inputVarIndex in range(len(self.memFuncs)):
+                for mfIndex, mf in enumerate(self.memFuncs[inputVarIndex]):
+                    for param in mf[1]:  # Iterate over all parameters in the membership function
+                        gradient = self._computeGradient(inputVarIndex, mfIndex, param)
+                        mf[1][param] -= k * gradient
+
+            # Check convergence
             if len(self.errors) > 1 and abs(self.errors[-1] - self.errors[-2]) < 1e-5:
                 convergence = True
 
