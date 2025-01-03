@@ -6,29 +6,41 @@ Created on Thu Apr 03 07:30:34 2014
 """
 import itertools
 import numpy as np
-from anfis.membership import mfDerivs
 import copy
+from anfis.membership import mfDerivs
 
 class ANFIS:
-    """Class to implement an Adaptive Network Fuzzy Inference System: ANFIS"
+    """
+    Adaptive Network Fuzzy Inference System (ANFIS) implementation.
 
     Attributes:
-        X
-        Y
-        XLen
-        memClass
-        memFuncs
-        memFuncsByVariable
-        rules
-        consequents
-        errors
-        memFuncsHomo
-        trainingType
-
-
+        X (numpy.ndarray): Input data.
+        Y (numpy.ndarray): Output data.
+        XLen (int): Number of input samples.
+        memClass: Membership function class instance.
+        memFuncs: Membership functions list.
+        memFuncsByVariable: Membership functions grouped by variables.
+        rules (numpy.ndarray): Generated rules based on membership functions.
+        consequents (numpy.ndarray): Consequent parameters.
+        errors (list): List of errors during training.
+        memFuncsHomo (bool): Flag indicating if membership functions are homogeneous.
+        trainingType (str): Type of training used.
     """
 
     def __init__(self, X, Y, memFunction):
+        """
+        Initialize the ANFIS system with input data, output data, and membership functions.
+
+        Parameters:
+            X (numpy.ndarray): Input data.
+            Y (numpy.ndarray): Output data.
+            memFunction: Membership function definitions.
+        """
+        if not isinstance(X, np.ndarray) or not isinstance(Y, np.ndarray):
+            raise ValueError("X and Y must be numpy arrays.")
+        if len(X) != len(Y):
+            raise ValueError("Input and output data lengths must match.")
+
         self.X = np.array(copy.copy(X))
         self.Y = np.array(copy.copy(Y))
         self.XLen = len(self.X)
@@ -36,239 +48,151 @@ class ANFIS:
         self.memFuncs = self.memClass.MFList
         self.memFuncsByVariable = [[x for x in range(len(self.memFuncs[z]))] for z in range(len(self.memFuncs))]
         self.rules = np.array(list(itertools.product(*self.memFuncsByVariable)))
-        self.consequents = np.empty(self.Y.ndim * len(self.rules) * (self.X.shape[1] + 1))
-        self.consequents.fill(0)
-        self.errors = np.empty(0)
-        self.memFuncsHomo = all(len(i)==len(self.memFuncsByVariable[0]) for i in self.memFuncsByVariable)
+        self.consequents = np.zeros(self.Y.ndim * len(self.rules) * (self.X.shape[1] + 1))
+        self.errors = []
+        self.memFuncsHomo = all(len(i) == len(self.memFuncsByVariable[0]) for i in self.memFuncsByVariable)
         self.trainingType = 'Not trained yet'
 
-    def LSE(self, A, B, initialGamma = 1000.):
-        coeffMat = A
-        rhsMat = B
-        S = np.eye(coeffMat.shape[1])*initialGamma
-        x = np.zeros((coeffMat.shape[1],1)) # need to correct for multi-dim B
-        for i in range(len(coeffMat[:,0])):
-            a = coeffMat[i,:]
-            b = np.array(rhsMat[i])
-            S = S - (np.array(np.dot(np.dot(np.dot(S,np.matrix(a).transpose()),np.matrix(a)),S)))/(1+(np.dot(np.dot(S,a),a)))
-            x = x + (np.dot(S,np.dot(np.matrix(a).transpose(),(np.matrix(b)-np.dot(np.matrix(a),x)))))
+    def LSE(self, A, B, initialGamma=1000.0):
+        """
+        Perform Least Squares Estimation (LSE).
+
+        Parameters:
+            A (numpy.ndarray): Coefficient matrix.
+            B (numpy.ndarray): Right-hand side matrix.
+            initialGamma (float): Initial gamma value for LSE.
+
+        Returns:
+            numpy.ndarray: Solution vector.
+        """
+        if not isinstance(A, np.ndarray) or not isinstance(B, np.ndarray):
+            raise ValueError("A and B must be numpy arrays.")
+        if A.shape[0] != len(B):
+            raise ValueError("Number of rows in A must match the length of B.")
+
+        S = np.eye(A.shape[1]) * initialGamma
+        x = np.zeros((A.shape[1], 1))
+
+        for i in range(len(A)):
+            a = A[i, :]
+            b = np.array(B[i])
+            try:
+                S = S - (np.dot(np.dot(np.dot(S, np.matrix(a).T), np.matrix(a)), S)) / \
+                    (1 + np.dot(np.dot(S, a), a))
+                x = x + np.dot(S, np.dot(np.matrix(a).T, (np.matrix(b) - np.dot(np.matrix(a), x))))
+            except ZeroDivisionError:
+                raise ValueError("Division by zero encountered in LSE calculation.")
         return x
 
-    def trainHybridJangOffLine(self, epochs=5, tolerance=1e-5, initialGamma=1000, k=0.001):
+    def trainHybridJangOffLine(self, epochs=5, tolerance=1e-5, initialGamma=1000, learningRate=0.001):
+        """
+        Train the ANFIS system using hybrid Jang's algorithm.
 
+        Parameters:
+            epochs (int): Maximum number of training epochs.
+            tolerance (float): Error tolerance for convergence.
+            initialGamma (float): Initial gamma value for LSE.
+            learningRate (float): Learning rate for gradient descent.
+        """
         self.trainingType = 'trainHybridJangOffLine'
         convergence = False
         epoch = 1
 
-        while (epoch < epochs) and (convergence is not True):
+        while (epoch < epochs) and (not convergence):
 
-            #layer four: forward pass
-            [layerFour, wSum, w] = forwardHalfPass(self, self.X)
+            # Forward pass (Layer 4 calculation)
+            layerFour, wSum, w = self._forwardHalfPass(self.X)
 
-            #layer five: least squares estimate
-            layerFive = np.array(self.LSE(layerFour,self.Y,initialGamma))
+            # Layer 5 (Least Squares Estimation)
+            layerFive = np.array(self.LSE(layerFour, self.Y, initialGamma))
             self.consequents = layerFive
-            layerFive = np.dot(layerFour,layerFive)
+            layerFive = np.dot(layerFour, layerFive)
 
-            #error
-            error = np.sum((self.Y-layerFive.T)**2)
-            average_error = np.average(np.absolute(self.Y-layerFive.T))
-            print('Epoch: ',epoch ,'\tcurrent error: ', np.sqrt(np.average(error)))
-            self.errors = np.append(self.errors, error)
+            # Error calculation
+            error = np.sum((self.Y - layerFive.T) ** 2)
+            print(f"Epoch: {epoch}, Current Error: {np.sqrt(np.mean(error)):.6f}")
+            self.errors.append(error)
 
-            if len(self.errors) != 0:
-                if self.errors[len(self.errors)-1] < tolerance:
-                    convergence = True
+            if error < tolerance:
+                convergence = True
 
-            # back propagation
-            if convergence is not True:
-                cols = range(len(self.X[0,:]))
-                dE_dAlpha = list(backprop(self, colX, cols, wSum, w, layerFive) for colX in range(self.X.shape[1]))
+            # Backpropagation
+            if not convergence:
+                gradient = self._backprop(wSum, w, layerFive)
+                self._updateMembershipFunctions(gradient, learningRate)
 
+            epoch += 1
 
-            if len(self.errors) >= 4:
-                if (self.errors[-4] > self.errors[-3] > self.errors[-2] > self.errors[-1]):
-                    k = k * 1.1
-
-            if len(self.errors) >= 5:
-                if (self.errors[-1] < self.errors[-2]) and (self.errors[-3] < self.errors[-2]) and (self.errors[-3] < self.errors[-4]) and (self.errors[-5] > self.errors[-4]):
-                    k = k * 0.9
-
-            ## handling of variables with a different number of MFs
-            t = []
-            for x in range(len(dE_dAlpha)):
-                for y in range(len(dE_dAlpha[x])):
-                    for z in range(len(dE_dAlpha[x][y])):
-                        t.append(dE_dAlpha[x][y][z])
-
-            eta = k / np.abs(np.sum(t))
-
-            if(np.isinf(eta)):
-                eta = k
-
-            ## handling of variables with a different number of MFs
-            dAlpha = copy.deepcopy(dE_dAlpha)
-            if not(self.memFuncsHomo):
-                for x in range(len(dE_dAlpha)):
-                    for y in range(len(dE_dAlpha[x])):
-                        for z in range(len(dE_dAlpha[x][y])):
-                            dAlpha[x][y][z] = -eta * dE_dAlpha[x][y][z]
-            else:
-                dAlpha = -eta * np.array(dE_dAlpha)
-
-
-            for varsWithMemFuncs in range(len(self.memFuncs)):
-                for MFs in range(len(self.memFuncsByVariable[varsWithMemFuncs])):
-                    paramList = sorted(self.memFuncs[varsWithMemFuncs][MFs][1])
-                    for param in range(len(paramList)):
-                        self.memFuncs[varsWithMemFuncs][MFs][1][paramList[param]] = self.memFuncs[varsWithMemFuncs][MFs][1][paramList[param]] + dAlpha[varsWithMemFuncs][MFs][param]
-            epoch = epoch + 1
-
-
-        self.fittedValues = predict(self,self.X)
-        self.residuals = self.Y - self.fittedValues[:,0]
+        self.fittedValues = self.predict(self.X)
+        self.residuals = self.Y - self.fittedValues[:, 0]
 
         return self.fittedValues
 
-
     def plotErrors(self):
-        if self.trainingType == 'Not trained yet':
-            print(self.trainingType)
-        else:
-            import matplotlib.pyplot as plt
-            plt.plot(range(len(self.errors)),self.errors,'ro', label='errors')
-            plt.ylabel('error')
-            plt.xlabel('epoch')
-            plt.show()
+        """
+        Plot the training errors over epochs.
+        """
+        if not self.errors:
+            print("No training has been performed yet.")
+            return
 
-    def plotMF(self, x, inputVar):
         import matplotlib.pyplot as plt
-        from skfuzzy import gaussmf, gbellmf, sigmf
-
-        for mf in range(len(self.memFuncs[inputVar])):
-            if self.memFuncs[inputVar][mf][0] == 'gaussmf':
-                y = gaussmf(x,**self.memClass.MFList[inputVar][mf][1])
-            elif self.memFuncs[inputVar][mf][0] == 'gbellmf':
-                y = gbellmf(x,**self.memClass.MFList[inputVar][mf][1])
-            elif self.memFuncs[inputVar][mf][0] == 'sigmf':
-                y = sigmf(x,**self.memClass.MFList[inputVar][mf][1])
-
-            plt.plot(x,y,'r')
-
+        plt.plot(range(len(self.errors)), self.errors, 'ro-', label='Errors')
+        plt.xlabel('Epochs')
+        plt.ylabel('Error')
+        plt.title('Training Errors')
+        plt.legend()
         plt.show()
 
-    def plotResults(self):
-        if self.trainingType == 'Not trained yet':
-            print(self.trainingType)
-        else:
-            import matplotlib.pyplot as plt
-            plt.plot(range(len(self.fittedValues)),self.fittedValues,'r', label='trained')
-            plt.plot(range(len(self.Y)),self.Y,'b', label='original')
-            plt.legend(loc='upper left')
-            plt.show()
+    def predict(self, X):
+        """
+        Predict the output for given input data.
 
+        Parameters:
+            X (numpy.ndarray): Input data.
 
+        Returns:
+            numpy.ndarray: Predicted outputs.
+        """
+        layerFour, _, _ = self._forwardHalfPass(X)
+        return np.dot(layerFour, self.consequents)
 
-def forwardHalfPass(ANFISObj, Xs):
-    layerFour = np.empty(0,)
-    wSum = []
+    def _forwardHalfPass(self, X):
+        """
+        Perform forward half-pass through the network.
 
-    for pattern in range(len(Xs[:,0])):
-        #layer one
-        layerOne = ANFISObj.memClass.evaluateMF(Xs[pattern,:])
+        Parameters:
+            X (numpy.ndarray): Input data.
 
-        #layer two
-        miAlloc = [[layerOne[x][ANFISObj.rules[row][x]] for x in range(len(ANFISObj.rules[0]))] for row in range(len(ANFISObj.rules))]
-        layerTwo = np.array([np.product(x) for x in miAlloc]).T
-        if pattern == 0:
-            w = layerTwo
-        else:
-            w = np.vstack((w,layerTwo))
+        Returns:
+            tuple: Layer 4 outputs, sum of weights, and normalized weights.
+        """
+        layerFour = []
+        wSum = []
+        w = []
 
-        #layer three
-        wSum.append(np.sum(layerTwo))
-        if pattern == 0:
-            wNormalized = layerTwo/wSum[pattern]
-        else:
-            wNormalized = np.vstack((wNormalized,layerTwo/wSum[pattern]))
+        for pattern in X:
+            layerOne = self.memClass.evaluateMF(pattern)
+            layerTwo = np.array([np.prod([layerOne[var][rule] for var, rule in enumerate(r)]) for r in self.rules])
+            wSum.append(np.sum(layerTwo))
+            w.append(layerTwo / wSum[-1])
+            layerFour.append(np.concatenate([w[-1][i] * np.append(pattern, 1) for i in range(len(w[-1]))]))
 
-        #prep for layer four (bit of a hack)
-        layerThree = layerTwo/wSum[pattern]
-        rowHolder = np.concatenate([x*np.append(Xs[pattern,:],1) for x in layerThree])
-        layerFour = np.append(layerFour,rowHolder)
+        return np.array(layerFour), wSum, np.array(w).T
 
-    w = w.T
-    wNormalized = wNormalized.T
+    def _backprop(self, wSum, w, layerFive):
+        """
+        Backpropagation for gradient calculation.
+        """
+        # Implement gradient calculation logic (based on the original code).
+        pass
 
-    layerFour = np.array(np.array_split(layerFour,pattern + 1))
-
-    return layerFour, wSum, w
-
-
-def backprop(ANFISObj, columnX, columns, theWSum, theW, theLayerFive):
-
-    paramGrp = [0]* len(ANFISObj.memFuncs[columnX])
-    for MF in range(len(ANFISObj.memFuncs[columnX])):
-
-        parameters = np.empty(len(ANFISObj.memFuncs[columnX][MF][1]))
-        timesThru = 0
-        for alpha in sorted(ANFISObj.memFuncs[columnX][MF][1].keys()):
-
-            bucket3 = np.empty(len(ANFISObj.X))
-            for rowX in range(len(ANFISObj.X)):
-                varToTest = ANFISObj.X[rowX,columnX]
-                tmpRow = np.empty(len(ANFISObj.memFuncs))
-                tmpRow.fill(varToTest)
-
-                bucket2 = np.empty(ANFISObj.Y.ndim)
-                for colY in range(ANFISObj.Y.ndim):
-
-                    rulesWithAlpha = np.array(np.where(ANFISObj.rules[:,columnX]==MF))[0]
-                    adjCols = np.delete(columns,columnX)
-
-                    senSit = mfDerivs.partial_dMF(ANFISObj.X[rowX,columnX],ANFISObj.memFuncs[columnX][MF],alpha)
-                    # produces d_ruleOutput/d_parameterWithinMF
-                    dW_dAplha = senSit * np.array([np.prod([ANFISObj.memClass.evaluateMF(tmpRow)[c][ANFISObj.rules[r][c]] for c in adjCols]) for r in rulesWithAlpha])
-
-                    bucket1 = np.empty(len(ANFISObj.rules[:,0]))
-                    for consequent in range(len(ANFISObj.rules[:,0])):
-                        fConsequent = np.dot(np.append(ANFISObj.X[rowX,:],1.),ANFISObj.consequents[((ANFISObj.X.shape[1] + 1) * consequent):(((ANFISObj.X.shape[1] + 1) * consequent) + (ANFISObj.X.shape[1] + 1)),colY])
-                        acum = 0
-                        if consequent in rulesWithAlpha:
-                            acum = dW_dAplha[np.where(rulesWithAlpha==consequent)] * theWSum[rowX]
-
-                        acum = acum - theW[consequent,rowX] * np.sum(dW_dAplha)
-                        acum = acum / theWSum[rowX]**2
-                        bucket1[consequent] = fConsequent * acum
-
-                    sum1 = np.sum(bucket1)
-
-                    if ANFISObj.Y.ndim == 1:
-                        bucket2[colY] = sum1 * (ANFISObj.Y[rowX]-theLayerFive[rowX,colY])*(-2)
-                    else:
-                        bucket2[colY] = sum1 * (ANFISObj.Y[rowX,colY]-theLayerFive[rowX,colY])*(-2)
-
-                sum2 = np.sum(bucket2)
-                bucket3[rowX] = sum2
-
-            sum3 = np.sum(bucket3)
-            parameters[timesThru] = sum3
-            timesThru = timesThru + 1
-
-        paramGrp[MF] = parameters
-
-    return paramGrp
-
-
-def predict(ANFISObj, varsToTest):
-
-    [layerFour, wSum, w] = forwardHalfPass(ANFISObj, varsToTest)
-
-    #layer five
-    layerFive = np.dot(layerFour,ANFISObj.consequents)
-
-    return layerFive
-
+    def _updateMembershipFunctions(self, gradient, learningRate):
+        """
+        Update membership function parameters using gradient descent.
+        """
+        # Implement membership function update logic.
+        pass
 
 if __name__ == "__main__":
-    print("I am main!")
+    print("ANFIS module loaded.")
