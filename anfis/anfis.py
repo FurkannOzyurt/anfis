@@ -45,32 +45,42 @@ class ANFIS:
         self.trainingType = 'Not trained yet'
 
     def _forwardHalfPass(self, Xs):
-        """
-        Perform the forward pass for the ANFIS system.
+    """
+    Perform the forward pass for the ANFIS system.
 
-        Args:
-            Xs (numpy.ndarray): Input data.
+    Args:
+        Xs (numpy.ndarray): Input data.
 
-        Returns:
-            tuple: Layer four outputs, weight sums, and weights.
-        """
-        layerFour = []
-        wSum = []
+    Returns:
+        tuple: Layer four outputs, weight sums, and weights.
+    """
+    layerFour = []
+    wSum = []
 
-        for pattern in Xs:
-            layerOne = self.memClass.evaluateMF(pattern)
-            miAlloc = [
-                [layerOne[x][self.rules[row][x]] for x in range(len(self.rules[0]))]
-                for row in range(len(self.rules))
-            ]
-            layerTwo = np.array([np.product(x) for x in miAlloc])
-            wSum.append(np.sum(layerTwo))
+    for pattern in Xs:
+        layerOne = self.memClass.evaluateMF(pattern)
+        print(f"Layer One: {layerOne}")
 
-            layerThree = layerTwo / wSum[-1]
-            rowHolder = np.concatenate([x * np.append(pattern, 1) for x in layerThree])
-            layerFour.append(rowHolder)
+        miAlloc = [
+            [layerOne[x][self.rules[row][x]] if layerOne[x] else 1.0
+             for x in range(len(self.rules[0]))]
+            for row in range(len(self.rules))
+        ]
+        print(f"miAlloc: {miAlloc}")
 
-        return np.array(layerFour), wSum, np.array(layerTwo)
+        layerTwo = np.array([np.product(x) for x in miAlloc])
+        print(f"Layer Two: {layerTwo}")
+
+        if np.sum(layerTwo) == 0:
+            print("Warning: All layerTwo values are zero. Adjusting to avoid division by zero.")
+            layerTwo += 1e-6
+
+        wSum.append(np.sum(layerTwo))
+        layerThree = layerTwo / wSum[-1]
+        rowHolder = np.concatenate([x * np.append(pattern, 1) for x in layerThree])
+        layerFour.append(rowHolder)
+
+    return np.array(layerFour), wSum, np.array(layerTwo)
 
     def _computeGradient(self, inputVarIndex, mfIndex, param):
         """
